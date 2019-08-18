@@ -52,7 +52,7 @@ Systems not based on Debian/Ubuntu will have similar packages, but you'll need t
 
 ### Downloading and installing Qt
 
-If your distro provides a Qt 5.9.5 package, try to use it. Otherwise, download a supported Qt version from qt.io.
+Download the Qt installer from qt.io and install a supported Qt version.
 
 On Windows and OSX, you can omit the ``-DQTROOT`` argument to use the Qt built by Plex. (Untested whether this works reliably.)
 
@@ -89,7 +89,6 @@ Assuming that everything else has installed correctly, building Plex Media Playe
 
 You should now be able to start PMP as ``plexmediaplayer`` from the terminal.
 
-If you use your distro's Qt, use `-DQTROOT=/usr` or similar.
 
 Normally, the Ninja generator (via ``-GNinja``) is preferred, but cmake + ninja support appears to be broken on Ubuntu 16.04.
 
