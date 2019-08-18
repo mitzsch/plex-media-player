@@ -50,13 +50,13 @@ First, some preparations:
 
 Systems not based on Debian/Ubuntu will have similar packages, but you'll need to figure out their names yourself.
 
-### Downloading and installing Qt
+## Downloading and installing Qt
 
 Download the Qt installer from qt.io and install a supported Qt version.
 
 On Windows and OSX, you can omit the ``-DQTROOT`` argument to use the Qt built by Plex. (Untested whether this works reliably.)
 
-### Building mpv and ffmpeg
+## Building mpv and ffmpeg
 
 While most distros have FFmpeg and mpv packages, they're often outdated. It's recommended to build a current version, or to get them from 3rd party sources (some are listed on https://mpv.io/installation/).
 
@@ -74,7 +74,7 @@ With this, libmpv should have been installed to ``/usr/local/``. It does not con
 
 You can also attempt to skip the installation step, and change the paths in the PMP build step to the build directory, but this is more complicated.
 
-### Building plex-media-player
+## Building plex-media-player
 
 Assuming that everything else has installed correctly, building Plex Media Player should now be fairly straightforward:
 
@@ -100,6 +100,14 @@ Sometimes, PMP's cmake run mysteriously fails. It's possible that https://bugrep
 * comment ``set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES cxx_decltype)`` with ``#``
 
 Sometimes, PMP will pick up SDL 1.x libraries. This is not supported and will lead to build failures. You need SDL 2. You can disable use of SLD with ``-DENABLE_SDL2=off`` (it's used for some remotes).
+
+## Advices 
+
+_coming soon_
+
+## FAQ
+
+_coming soon_ 
 
 ## License
 
