@@ -1,11 +1,13 @@
 ## Building
 
+#This repo is mainly focused on Linux
+
 You need:
 
-* Qt 5.9.5
+* Qt 5.9.5 / Qt 5.11.3 / Qt 5.12.4
 * cmake 3.1 or newer
 * ninja is recommended for building
-* FFmpeg 3.x and mpv from github
+* FFmpeg and mpv from github
 
 ## Building on Mac OS X
 
@@ -103,11 +105,24 @@ Sometimes, PMP will pick up SDL 1.x libraries. This is not supported and will le
 
 ## Advices 
 
-_coming soon_
+* If you like to run PlexMediaPlayer on a 4K TV you should use Qt 5.12.4 instead of the Qt 5.9.5 or Qt 5.11.3. This prevents UI glitches and especially glitches in the settings menu.
+
+* Disable the PMPHelper as it has no function under Linux and causes some issues when shutting down the system (A process for ... is running)  -> Add ``-DENABLE_HELPER=off`` to the ``cmake`` line
+
+* If you need interlacing don´t use the newer mpv versions because they fundamentally changed the way how interlaced content is handled. (< v0.27)
+
 
 ## FAQ
+* _VAAPI on Linux is not working?_
 
-_coming soon_ 
+Run ``QT_XCB_GL_INTEGRATION=xcb_egl plexmediaplayer``
+
+
+* _HDR passthrough support?_
+
+Might come in the future, when the Linux Kernel and mpv support HDR passthrough on X11, PlexMediaPlayer will probably support it aswell
+
+
 
 ## License
 
