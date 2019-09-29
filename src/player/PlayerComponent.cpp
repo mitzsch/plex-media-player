@@ -900,6 +900,8 @@ void PlayerComponent::setAudioDelay(qint64 milliseconds)
     audioDelaySetting = "audio_delay.24hz";
   else if (fabs(displayFps - 25) < 0.5)
     audioDelaySetting = "audio_delay.25hz";
+  else if (fabs(displayFps - 30) < 0.5)
+    audioDelaySetting = "audio_delay.30hz";
   else if (fabs(displayFps - 50) < 0.5)
     audioDelaySetting = "audio_delay.50hz";
 
