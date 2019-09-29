@@ -322,6 +322,16 @@
         }
       },
       {
+        "value": "audio_delay.30hz",
+        "default": 0,
+        "hidden": true,
+        "possible_range": {
+          "min": -300,
+          "max": 300,
+          "step": 50
+        }
+      },
+      {
         "value": "audio_delay.50hz",
         "default": 0,
         "hidden": true,
