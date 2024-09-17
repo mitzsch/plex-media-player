@@ -313,3 +313,4 @@ void PlayerQuickItem::initMpv(PlayerComponent* player)
 
   connect(player, &PlayerComponent::windowVisible, this, &QQuickItem::setVisible);
   window()->update();
+}
