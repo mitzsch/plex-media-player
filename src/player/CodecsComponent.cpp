@@ -340,10 +340,12 @@ static QString findOldDeviceID()
 #ifdef Q_OS_MAC
     QDir::home().path() + "/Library/Application Support/Plex/Codecs/.device-id",
     QDir::home().path() + "/Library/Application Support/Plex Media Server/Codecs/.device-id",
+    QDir::home().path() + "/Library/Application Support/Plex/Plex Media Server/Codecs/.device-id",
 #endif
     QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Plex/Codecs/.device-id",
     QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Plex/codecs/.device-id",
     QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Plex Media Server/Codecs/.device-id",
+    QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/Plex/Plex Media Server/Codecs/.device-id",
     Paths::dataDir() + "/codecs/.device-id",
   };
 
@@ -683,9 +685,9 @@ static Downloader::HeaderList getPlexHeaders()
   Downloader::HeaderList headers;
   QString auth = SystemComponent::Get().authenticationToken();
   if (auth.size())
-    headers.append({"X-Plex-Token", auth});
-  headers.append({"X-Plex-Product", WITH_CODECS ? "Plex Media Player" : "openpmp"});
-  headers.append({"X-Plex-Platform", "Konvergo"});
+    headers.append(Downloader::Header{"X-Plex-Token", auth});
+  headers.append(Downloader::Header{"X-Plex-Product", WITH_CODECS ? "Plex Media Player" : "openpmp"});
+  headers.append(Downloader::Header{"X-Plex-Platform", "Konvergo"});
   return headers;
 }
 

@@ -88,6 +88,8 @@ bool PlayerComponent::componentInitialize()
   mpv_request_log_messages(m_mpv, "terminal-default");
   mpv::qt::set_property(m_mpv, "msg-level", "all=v");
 
+  // Configuration properties defined in the mpv.conf will override our
+  // hardcoded properties below.
   mpv::qt::set_property(m_mpv, "config", "yes");
   mpv::qt::set_property(m_mpv, "config-dir", Paths::dataDir());
 
@@ -113,13 +115,18 @@ bool PlayerComponent::componentInitialize()
 
   // Do not let the decoder downmix (better customization for us).
   mpv::qt::set_property(m_mpv, "ad-lavc-downmix", false);
- // Make it load the hwdec interop, so hwdec can be enabled at runtime.
-  mpv::qt::set_property(m_mpv, "gpu-hwdec-interop", "auto");
+
+  // Make it load the hwdec interop, so hwdec can be enabled at runtime.
+  mpv::qt::set_property(m_mpv, "hwdec-preload", "auto");
 
   // User-visible application name used by some audio APIs (at least PulseAudio).
   mpv::qt::set_property(m_mpv, "audio-client-name", QCoreApplication::applicationName());
+
   // User-visible stream title used by some audio APIs (at least PulseAudio and wasapi).
   mpv::qt::set_property(m_mpv, "title", QCoreApplication::applicationName());
+
+  // See: https://github.com/plexinc/plex-media-player/issues/736
+  mpv::qt::set_property(m_mpv, "cache-seek-min", 5000);
 
   mpv::qt::set_property(m_mpv, "tls-verify", "yes");
 
@@ -131,7 +138,8 @@ bool PlayerComponent::componentInitialize()
        << "/usr/local/share/certs/ca-root-nss.crt"
        << "/etc/ssl/cert.pem"
        << "/usr/share/curl/curl-ca-bundle.crt"
-       << "/usr/local/share/curl/curl-ca-bundle.crt";
+       << "/usr/local/share/curl/curl-ca-bundle.crt"
+       << "/var/lib/ca-certificates/ca-bundle.pem";
 
   bool success = false;
 
@@ -163,11 +171,6 @@ bool PlayerComponent::componentInitialize()
   mpv::qt::set_property(m_mpv, "hr-seek", "no");
   // Force vo_rpi to fullscreen.
   mpv::qt::set_property(m_mpv, "fullscreen", true);
-  // wait for cache to be filled before starting playback
-  mpv::qt::set_property(m_mpv, "cache-pause-wait", "yes");
-  // define maximum cache time in seconds
-  mpv::qt::set_property(m_mpv, "cache-pause-secs", 20);
-
 #endif
 
   if (mpv_initialize(m_mpv) < 0)
@@ -185,11 +188,15 @@ bool PlayerComponent::componentInitialize()
   // Setup a hook with the ID 1, which is run during the file is loaded.
   // Used to delay playback start for display framerate switching.
   // (See handler in handleMpvEvent() for details.)
-  mpv_hook_add(m_mpv, 1, "on_load", 0);
-
   // Setup a hook with the ID 2, which is run at a certain stage during loading.
   // We use it to initialize stream selections and to probe the codecs.
+#if MPV_CLIENT_API_VERSION < MPV_MAKE_VERSION(1, 100)
+  mpv::qt::command(m_mpv, QStringList() << "hook-add" << "on_load" << "1" << "0");
+  mpv::qt::command(m_mpv, QStringList() << "hook-add" << "on_preloaded" << "2" << "0");
+#else
+  mpv_hook_add(m_mpv, 1, "on_load", 0);
   mpv_hook_add(m_mpv, 2, "on_preloaded", 0);
+#endif
 
   updateAudioDeviceList();
   setAudioConfiguration();
@@ -597,26 +604,24 @@ void PlayerComponent::handleMpvEvent(mpv_event *event)
         QLOG_ERROR() << qPrintable(logline);
       break;
     }
-    case MPV_EVENT_HOOK:
+    case MPV_EVENT_CLIENT_MESSAGE:
     {
-      mpv_event_hook *hook = (mpv_event_hook *)event->data;
-      if (!hook)
+      mpv_event_client_message *msg = (mpv_event_client_message *)event->data;
+      if (msg->num_args < 3 || strcmp(msg->args[0], "hook_run") != 0)
         break;
-
-      uint64_t hookid = hook->id;
+      QString resumeId = QString::fromUtf8(msg->args[2]);
       // Start "on_load" hook.
       // This happens when the player is about to load the file, but no actual loading has taken part yet.
       // We use this to block loading until we explicitly tell it to continue.
-      if (!strcmp(hook->name, "on_load"))
+      if (!strcmp(msg->args[1], "1"))
       {
         // Calling this lambda will instruct mpv to continue loading the file.
         auto resume = [=] {
           QLOG_INFO() << "checking codecs";
           startCodecsLoading([=] {
             QLOG_INFO() << "resuming loading";
-            mpv_hook_continue(m_mpv, hookid);
+            mpv::qt::command(m_mpv, QStringList() << "hook-ack" << resumeId);
           });
-         
         };
         if (switchDisplayFrameRate())
         {
@@ -636,18 +641,62 @@ void PlayerComponent::handleMpvEvent(mpv_event *event)
       }
       // Start "on_preloaded" hook.
       // Used initialize stream selections and to probe codecs.
-      if (!strcmp(hook->name, "on_preloaded"))
+      if (!strcmp(msg->args[1], "2"))
       {
         reselectStream(m_currentSubtitleStream, MediaType::Subtitle);
         reselectStream(m_currentAudioStream, MediaType::Audio);
         startCodecsLoading([=] {
-          QLOG_INFO() << "MPV loading has been resumed";
-          mpv_hook_continue(m_mpv, hookid);
+          mpv::qt::command(m_mpv, QStringList() << "hook-ack" << resumeId);
         });
         break;
       }
       break;
     }
+#if MPV_CLIENT_API_VERSION >= MPV_MAKE_VERSION(1, 100)
+    case MPV_EVENT_HOOK:
+    {
+      mpv_event_hook *hook = (mpv_event_hook *)event->data;
+      uint64_t id = hook->id;
+
+      if (!strcmp(hook->name, "on_load"))
+      {
+        // Calling this lambda will instruct mpv to continue loading the file.
+        auto resume = [=] {
+          QLOG_INFO() << "checking codecs";
+          startCodecsLoading([=] {
+            QLOG_INFO() << "resuming loading";
+            mpv_hook_continue(m_mpv, id);
+          });
+        };
+        if (switchDisplayFrameRate())
+        {
+          // Now wait for some time for mode change - this is needed because mode changing can take some
+          // time, during which the screen is black, and initializing hardware decoding could fail due
+          // to various strange OS-related reasons.
+          // (Better hope the user doesn't try to exit Konvergo during mode change.)
+          int pause = SettingsComponent::Get().value(SETTINGS_SECTION_VIDEO, "refreshrate.delay").toInt() * 1000;
+          QLOG_INFO() << "waiting" << pause << "msec after rate switch before loading";
+          QTimer::singleShot(pause, resume);
+        }
+        else
+        {
+          resume();
+        }
+        break;
+      }
+      if (!strcmp(hook->name, "on_preloaded"))
+      {
+        reselectStream(m_currentSubtitleStream, MediaType::Subtitle);
+        reselectStream(m_currentAudioStream, MediaType::Audio);
+        startCodecsLoading([=] {
+          mpv_hook_continue(m_mpv, id);
+        });
+        break;
+      }
+      break;
+    }
+#endif
+
     default:; /* ignore */
   }
 }
@@ -900,8 +949,6 @@ void PlayerComponent::setAudioDelay(qint64 milliseconds)
     audioDelaySetting = "audio_delay.24hz";
   else if (fabs(displayFps - 25) < 0.5)
     audioDelaySetting = "audio_delay.25hz";
-  else if (fabs(displayFps - 30) < 0.5)
-    audioDelaySetting = "audio_delay.30hz";
   else if (fabs(displayFps - 50) < 0.5)
     audioDelaySetting = "audio_delay.50hz";
 
@@ -1091,22 +1138,22 @@ void PlayerComponent::setAudioConfiguration()
 void PlayerComponent::updateSubtitleSettings()
 {
   QVariant size = SettingsComponent::Get().value(SETTINGS_SECTION_SUBTITLES, "size");
-  mpv::qt::set_property(m_mpv, "sub-font-size", size);
+  mpv::qt::set_property(m_mpv, "sub-text-font-size", size);
 
   QVariant colorsString = SettingsComponent::Get().value(SETTINGS_SECTION_SUBTITLES, "color");
   auto colors = colorsString.toString().split(",");
   if (colors.length() == 2)
   {
-    mpv::qt::set_property(m_mpv, "sub-color", colors[0]);
-    mpv::qt::set_property(m_mpv, "sub-border-color", colors[1]);
+    mpv::qt::set_property(m_mpv, "sub-text-color", colors[0]);
+    mpv::qt::set_property(m_mpv, "sub-text-border-color", colors[1]);
   }
 
   QVariant subposString = SettingsComponent::Get().value(SETTINGS_SECTION_SUBTITLES, "placement");
   auto subpos = subposString.toString().split(",");
   if (subpos.length() == 2)
   {
-    mpv::qt::set_property(m_mpv, "sub-align-x", subpos[0]);
-    mpv::qt::set_property(m_mpv, "sub-align-y", subpos[1]);
+    mpv::qt::set_property(m_mpv, "sub-text-align-x", subpos[0]);
+    mpv::qt::set_property(m_mpv, "sub-text-align-y", subpos[1]);
   }
 }
 
@@ -1242,8 +1289,13 @@ QList<CodecDriver> convertCodecList(QVariant list, CodecType type)
   {
     QVariantMap map = e.toMap();
 
+    QString family = map["family"].toString();
     QString codec = map["codec"].toString();
     QString driver = map["driver"].toString();
+
+    // Only include FFmpeg codecs; exclude pseudo-codecs like spdif (on mpv versions where those were exposed).
+    if (family != "" && family != "lavc")
+      continue;
 
     CodecDriver ncodec = {};
     ncodec.type = type;
@@ -1464,10 +1516,6 @@ QString PlayerComponent::videoInformation() const
                                   !MPV_PROPERTY_BOOL("partially-seekable"))
                                  ? "yes" : "no") << endl;
   info << endl;
-  info << "Base Info:" << endl;
-  info << "MPV version: " << MPV_PROPERTY("mpv-version") << endl;
-  info << "FFmpeg: " << MPV_PROPERTY("ffmpeg-version") << endl;
-  info << endl;
   info << "Video:" << endl;
   info << "Codec: " << MPV_PROPERTY("video-codec") << endl;
   info << "Size: " << MPV_PROPERTY("video-params/dw") << "x"
@@ -1481,7 +1529,6 @@ QString PlayerComponent::videoInformation() const
                           << " (" << displayFps << ")" << endl;
   info << "Hardware Decoding: " << MPV_PROPERTY("hwdec-current")
                                 << " (" << MPV_PROPERTY("hwdec-interop") << ")" << endl;
-  info << "Video output: " << MPV_PROPERTY("current-vo") << endl; 
   info << endl;
   info << "Audio: " << endl;
   info << "Codec: " << MPV_PROPERTY("audio-codec") << endl;
@@ -1495,7 +1542,7 @@ QString PlayerComponent::videoInformation() const
   info << endl;
   info << "Performance: " << endl;
   info << "A/V: " << MPV_PROPERTY("avsync") << endl;
-  info << "Dropped frames: " << MPV_PROPERTY("frame-drop-count") << endl;
+  info << "Dropped frames: " << MPV_PROPERTY("vo-drop-frame-count") << endl;
   bool dispSync = MPV_PROPERTY_BOOL("display-sync-active");
   info << "Display Sync: ";
   if (!dispSync)

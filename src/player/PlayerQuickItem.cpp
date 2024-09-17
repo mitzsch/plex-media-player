@@ -3,19 +3,19 @@
 #include <stdexcept>
 
 #include <QCoreApplication>
-#include <QGuiApplication>
 #include <QOpenGLContext>
 #include <QRunnable>
-#include <QScreen>
 
 #include <QtGui/QOpenGLFramebufferObject>
 
 #include <QtQuick/QQuickWindow>
 #include <QOpenGLFunctions>
 
+#include <mpv/render_gl.h>
+
 #include "QsLog.h"
 #include "utils/Utils.h"
-#include "Globals.h"
+
 
 #if defined(Q_OS_WIN32)
 #include <windows.h>
@@ -79,8 +79,7 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 PlayerRenderer::PlayerRenderer(mpv::qt::Handle mpv, QQuickWindow* window)
-: m_mpv(mpv), m_mpv_gl(nullptr), m_window(window), m_size(), m_flip(true), m_hAvrtHandle(nullptr),
-  m_videoRectangle(-1, -1, -1, -1), m_fbo(0)
+: m_mpv(mpv), m_mpvGL(nullptr), m_window(window), m_size(), m_hAvrtHandle(nullptr), m_videoRectangle(-1, -1, -1, -1), m_fbo(0)
 {
 }
 
@@ -92,40 +91,35 @@ bool PlayerRenderer::init()
   DwmEnableMMCSS(TRUE);
 #endif
 
-  static mpv_opengl_init_params opengl_init_params =
-  {
-      get_proc_address, // .get_proc_address
+  mpv_opengl_init_params opengl_params = {
+      .get_proc_address = get_proc_address,
+      .get_proc_address_ctx = NULL,
   };
 
-
-  static mpv_render_param params[] =
-  {
-      {MPV_RENDER_PARAM_API_TYPE, (void *)MPV_RENDER_API_TYPE_OPENGL},
-      {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &opengl_init_params},
-#if defined(USE_X11EXTRAS)
-      {MPV_RENDER_PARAM_X11_DISPLAY, QX11Info::display()},
+  mpv_render_param params[] = {
+    {MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL},
+    {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &opengl_params},
+#ifdef USE_X11EXTRAS
+    {MPV_RENDER_PARAM_X11_DISPLAY, QX11Info::display()},
 #endif
-      {(mpv_render_param_type)0}
+    {MPV_RENDER_PARAM_INVALID},
   };
+  int err = mpv_render_context_create(&m_mpvGL, m_mpv, params);
 
-  int ret =  mpv_render_context_create(&m_mpv_gl, m_mpv, params);
-  if (ret)
-  {
-      QLOG_FATAL() << "Failed to create mpv render context";
-      return false;
+  if (err >= 0) {
+    mpv_render_context_set_update_callback(m_mpvGL, on_update, (void *)this);
+    return true;
   }
-
-  mpv_render_context_set_update_callback(m_mpv_gl, on_update, (void *)this);
-
-  return true;
+  return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 PlayerRenderer::~PlayerRenderer()
 {
   // Keep in mind that the m_mpv handle must be held until this is done.
-  if (m_mpv_gl)
-    mpv_render_context_free(m_mpv_gl);
+  if (m_mpvGL)
+    mpv_render_context_free(m_mpvGL);
+  m_mpvGL = nullptr;
   delete m_fbo;
 }
 
@@ -136,11 +130,11 @@ void PlayerRenderer::render()
 
   GLint fbo = 0;
   context->functions()->glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
-
+  bool flip = true;
 #if HAVE_OPTIMALORIENTATION
-  m_flip = !(context->format().orientationFlags() & QSurfaceFormat::MirrorVertically);
+  flip = !(context->format().orientationFlags() & QSurfaceFormat::MirrorVertically);
 #endif
-  bool screenFlip = m_flip;
+  bool screenFlip = flip;
   QSize fboSize = m_size;
   QOpenGLFramebufferObject *blitFbo = 0;
 
@@ -159,7 +153,7 @@ void PlayerRenderer::render()
       blitFbo = m_fbo;
       fboSize = m_fbo->size();
       fbo = m_fbo->handle();
-      m_flip = false;
+      flip = false;
 
       // Need to clear the background manually, since nothing else knows it has to be done.
       context->functions()->glClearColor(0, 0, 0, 0);
@@ -167,25 +161,18 @@ void PlayerRenderer::render()
     }
   }
 
-  mpv_opengl_fbo opengl_fbo =
-  {
-      fbo,              // .fbo
-      fboSize.width(),  // .w
-      fboSize.height(), // .h
+  mpv_opengl_fbo mpv_fbo = {
+    .fbo = fbo,
+    .w = fboSize.width(),
+    .h = fboSize.height(),
   };
-
-  mpv_render_param params[] =
-  {
-      { MPV_RENDER_PARAM_OPENGL_FBO, &(opengl_fbo) },
-      { MPV_RENDER_PARAM_FLIP_Y, &m_flip },
-      { MPV_RENDER_PARAM_INVALID }
+  int mpv_flip = flip ? -1 : 0;
+  mpv_render_param params[] = {
+    {MPV_RENDER_PARAM_OPENGL_FBO, &mpv_fbo},
+    {MPV_RENDER_PARAM_FLIP_Y, &mpv_flip},
+    {MPV_RENDER_PARAM_INVALID}
   };
-
-  int ret = mpv_render_context_render(m_mpv_gl, params);
-  if (ret)
-  {
-    QLOG_ERROR() << "MPV Rendering reported an error " << ret;
-  }
+  mpv_render_context_render(m_mpvGL, params);
 
   m_window->resetOpenGLState();
 
@@ -202,7 +189,8 @@ void PlayerRenderer::render()
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 void PlayerRenderer::swap()
 {
-  mpv_render_context_report_swap(m_mpv_gl);
+  if (m_mpvGL)
+    mpv_render_context_report_swap(m_mpvGL);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -239,7 +227,7 @@ void PlayerRenderer::on_update(void *ctx)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 PlayerQuickItem::PlayerQuickItem(QQuickItem* parent)
-: QQuickItem(parent), m_mpv_gl(nullptr), m_renderer(nullptr)
+: QQuickItem(parent), m_mpvGL(nullptr), m_renderer(nullptr)
 {
   connect(this, &QQuickItem::windowChanged, this, &PlayerQuickItem::onWindowChanged, Qt::DirectConnection);
   connect(this, &PlayerQuickItem::onFatalError, this, &PlayerQuickItem::onHandleFatalError, Qt::QueuedConnection);
@@ -248,8 +236,8 @@ PlayerQuickItem::PlayerQuickItem(QQuickItem* parent)
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 PlayerQuickItem::~PlayerQuickItem()
 {
-  if (m_mpv_gl)
-      mpv_render_context_set_update_callback(m_mpv_gl, nullptr, nullptr);
+  if (m_mpvGL)
+    mpv_render_context_set_update_callback(m_mpvGL, nullptr, nullptr);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -325,4 +313,3 @@ void PlayerQuickItem::initMpv(PlayerComponent* player)
 
   connect(player, &PlayerComponent::windowVisible, this, &QQuickItem::setVisible);
   window()->update();
-}
